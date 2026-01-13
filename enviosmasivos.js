@@ -1,153 +1,181 @@
-// Versión 2.0 Para Appscript de Google
-// Envío masivo de contratos/prácticas por correo con adjunto PDF desde Drive
-//Lee el documento sin perder ceros (ej. '07654321 → 07654321) y sirve para 8–11 dígitos.
-//Indexa archivos con regex (\d{8,11}) (DNI/CE).
-//Cambia subject + htmlBody según TIPO DE CONTRATO
+/**
+ * ============================================================
+ * ENVÍO MASIVO DE CONTRATOS / CONVENIOS / ADENDAS
+ * Versión: 3.2 (PRODUCCIÓN)
+ * ============================================================
+ */
 
-function envioMasivoContratos() {
-  const hoja = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Hoja 1");
-  const datos = hoja.getDataRange().getValues();
+function envioMasivoContratos_v3_2() {
 
-  const carpetaId = "10ycIn7wyKTFBhPgYbj-VQvjIdwJ2yJ19";
-  const carpeta = DriveApp.getFolderById(carpetaId);
-  const archivos = carpeta.getFiles();
-
-  // --- Helpers ---
-  const normalizarDocumento = (valor) => {
-    if (valor === null || valor === undefined) return "";
-    // Mantener como string, quitar apostrofe si existiera, quitar espacios y todo lo no numérico
-    const s = String(valor).trim().replace(/^'/, "");
-    const soloDigitos = s.replace(/\D/g, ""); // conserva ceros a la izquierda
-    // A prueba de CE 9-11 y DNI 8 (en general 8-11)
-    if (soloDigitos.length < 8 || soloDigitos.length > 11) return "";
-    return soloDigitos;
-  };
-
-  const limpiarTexto = (valor) => (valor === null || valor === undefined) ? "" : String(valor).trim();
-
-  // Quita tildes/acentos y caracteres raros para nombre de archivo adjunto (opcional pero ayuda)
-  const slugNombre = (texto) => {
-    return limpiarTexto(texto)
-      .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // quita acentos
-      .replace(/[^\w\s.-]/g, "") // deja letras, números, _, espacios, . y -
-      .replace(/\s+/g, " ") // colapsa espacios
-      .trim();
-  };
-
-  const obtenerPlantillaCorreo = (tipoContrato, dni, nombre) => {
-    const tipo = limpiarTexto(tipoContrato).toLowerCase();
-
-    if (tipo === "prácticas" || tipo === "practicas") {
-      return {
-        subject: `Convenio ${tipoContrato} - ${dni} - ${nombre}`,
-        htmlBody: `
-          Estimado(a) <b>${nombre}</b>,<br><br>
-          Cumplimos con enviar su convenio debidamente firmado por ambas partes.<br><br>
-          Saludos,<br><br>
-          <strong>Talento Humano</strong><br>
-          <strong>ASOCIACIÓN MUSEO DE ARTE DE LIMA</strong>
-        `
-      };
-    }
-
-    if (tipo === "laboral") {
-      return {
-        subject: `Contrato ${tipoContrato} - ${dni} - ${nombre}`,
-        htmlBody: `
-          Estimado(a) <b>${nombre}</b>,<br><br>
-          Cumplimos con enviar su contrato debidamente firmado por ambas partes.<br><br>
-          Saludos,<br><br>
-          <strong>Talento Humano</strong><br>
-          <strong>ASOCIACIÓN MUSEO DE ARTE DE LIMA</strong>
-        `
-      };
-    }
-
-    // Default: Locación (y cualquier otro valor cae aquí)
-    return {
-      subject: `Contrato ${tipoContrato} - ${dni} - ${nombre}`,
-      htmlBody: `
-        Estimado(a) <b>${nombre}</b>,<br><br>
-        Cumplimos con enviar su contrato bajo la modalidad <b>Locación de Servicio</b>
-        debidamente firmado por ambas partes.<br><br>
-        Saludos,<br><br>
-        <strong>Talento Humano</strong><br>
-        <strong>ASOCIACIÓN MUSEO DE ARTE DE LIMA</strong>
-      `
-    };
-  };
-
-  // --- Indexar PDFs por documento (DNI/CE) ---
-  // Guarda lista por doc por si hubiera más de 1 archivo con el mismo doc
-  const pdfPorDoc = {}; // { "87654321": [file1, file2], ... }
-
-  while (archivos.hasNext()) {
-    const archivo = archivos.next();
-    const nombreArchivo = archivo.getName();
-
-    // Busca cualquier secuencia de 8 a 11 dígitos en el nombre (DNI/CE)
-    const match = nombreArchivo.match(/(\d{8,11})/);
-    if (match) {
-      const doc = match[1];
-      if (!pdfPorDoc[doc]) pdfPorDoc[doc] = [];
-      pdfPorDoc[doc].push(archivo);
-    }
+  /* ===================== LOCK ===================== */
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) {
+    throw new Error("Otro proceso está en ejecución");
   }
 
-  // --- Recorre filas ---
-  // Columnas (según tu tabla):
-  // 0 DNI/CE | 1 NOMBRE | 2 TIPO | 3 correos | 4 ESTADO
-  for (let i = 1; i < datos.length; i++) {
-    const doc = normalizarDocumento(datos[i][0]); // DNI/CE
-    const nombre = limpiarTexto(datos[i][1]);
-    const tipoContrato = limpiarTexto(datos[i][2]);
-    const correo = limpiarTexto(datos[i][3]);
-    const estado = limpiarTexto(datos[i][4]).toUpperCase();
+  try {
 
-    // No reenviar
-    if (estado === "ENVIADO") {
-      Logger.log(`Fila ${i + 1} ya enviada, se omite`);
-      continue;
+    /* ===================== CONFIG ===================== */
+
+    const NOMBRE_HOJA = "Hoja 1";
+    const HOJA_LOG    = "LOG_ENVÍOS";
+    const FOLDER_ID   = "10ycIn7wyKTFBhPgYbj-VQvjIdwJ2yJ19";
+
+    // Columnas (0-based)
+    const COL_DNI     = 0;
+    const COL_NOMBRE  = 1;
+    const COL_TIPO    = 2;
+    const COL_PERIODO = 3;
+    const COL_CORREO  = 4;
+    const COL_ESTADO  = 5;
+
+    const hoja = SpreadsheetApp.getActive().getSheetByName(NOMBRE_HOJA);
+    if (!hoja) throw new Error("No se encontró la hoja principal");
+
+    const ss = SpreadsheetApp.getActive();
+    const logSheet = ss.getSheetByName(HOJA_LOG) || ss.insertSheet(HOJA_LOG);
+
+    const datos = hoja.getDataRange().getValues();
+    const nuevosEstados = [];
+
+    /* ===================== HELPERS ===================== */
+
+    const limpiar = v => v === null || v === undefined ? "" : String(v).trim();
+
+    const normalizarDNI = v => {
+      const s = limpiar(v).replace(/^'/, "").replace(/\D/g, "");
+      return (s.length >= 8 && s.length <= 11) ? s : "";
+    };
+
+    const validarPeriodo = p => /^\d{6}-\d{6}$/.test(p) ? p : "";
+
+    const emailValido = e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
+
+    const tipoValido = t =>
+      ["laboral", "prácticas", "practicas", "locación", "locacion", "adenda"]
+        .includes(t.toLowerCase());
+
+    const tipoArchivo = t => {
+      t = t.toLowerCase();
+      if (t.includes("práct")) return "convenio";
+      if (t === "adenda") return "adenda";
+      return "contrato";
+    };
+
+    const plantillaCorreo = (tipo, nombre) => {
+      tipo = tipo.toLowerCase();
+      if (tipo.includes("práct"))
+        return { subject: "Envío de Convenio de Prácticas", body:
+          `Estimado(a) <b>${nombre}</b>,<br><br>Adjuntamos su convenio firmado.<br><br>Saludos,<br><b>Talento Humano</b>` };
+
+      if (tipo === "adenda")
+        return { subject: "Envío de Adenda Contractual", body:
+          `Estimado(a) <b>${nombre}</b>,<br><br>Adjuntamos su adenda firmada.<br><br>Saludos,<br><b>Talento Humano</b>` };
+
+      if (tipo === "laboral")
+        return { subject: "Envío de Contrato Laboral", body:
+          `Estimado(a) <b>${nombre}</b>,<br><br>Adjuntamos su contrato laboral firmado.<br><br>Saludos,<br><b>Talento Humano</b>` };
+
+      return { subject: "Envío de Contrato por Locación de Servicios", body:
+        `Estimado(a) <b>${nombre}</b>,<br><br>Adjuntamos su contrato firmado.<br><br>Saludos,<br><b>Talento Humano</b>` };
+    };
+
+    const log = (dni, accion, detalle) => {
+      logSheet.appendRow([new Date(), dni, accion, detalle]);
+    };
+
+    /* ===================== CUOTA ===================== */
+
+    let cuotaDisponible = MailApp.getRemainingDailyQuota();
+    if (cuotaDisponible <= 0) {
+      throw new Error("Cuota de correos agotada");
     }
 
-    // Validaciones
-    if (!doc || !correo || !nombre || !tipoContrato) {
-      hoja.getRange(i + 1, 5).setValue("ERROR");
-      Logger.log(`ERROR fila ${i + 1}: faltan datos (doc/correo/nombre/tipo)`);
-      continue;
+    /* ===================== INDEXAR PDFs ===================== */
+
+    const index = {};
+    const regexPDF = /^(Contrato|Convenio|Adenda)_(\d{8,11})_(\d{6}-\d{6})\.pdf$/i;
+
+    const files = DriveApp.getFolderById(FOLDER_ID).getFiles();
+    while (files.hasNext()) {
+      const f = files.next();
+      const m = f.getName().match(regexPDF);
+      if (!m) continue;
+
+      const clave = `${m[1].toLowerCase()}_${m[2]}_${m[3]}`;
+      index[clave] = index[clave] || [];
+      index[clave].push(f);
     }
 
-    const candidatos = pdfPorDoc[doc];
-    if (!candidatos || candidatos.length === 0) {
-      hoja.getRange(i + 1, 5).setValue("ERROR");
-      Logger.log(`PDF no encontrado para documento ${doc} (fila ${i + 1})`);
-      continue;
+    /* ===================== PROCESO ===================== */
+
+    for (let i = 1; i < datos.length; i++) {
+
+      const fila = i + 1;
+      const estadoActual = limpiar(datos[i][COL_ESTADO]).toUpperCase();
+
+      if (estadoActual === "ENVIADO") {
+        nuevosEstados.push([estadoActual]);
+        continue;
+      }
+
+      if (cuotaDisponible <= 0) {
+        nuevosEstados.push(["PENDIENTE_CUOTA"]);
+        continue;
+      }
+
+      const dni     = normalizarDNI(datos[i][COL_DNI]);
+      const nombre  = limpiar(datos[i][COL_NOMBRE]);
+      const tipo    = limpiar(datos[i][COL_TIPO]);
+      const periodo = validarPeriodo(limpiar(datos[i][COL_PERIODO]));
+      const correo  = limpiar(datos[i][COL_CORREO]);
+
+      if (!dni || !nombre || !periodo || !tipoValido(tipo) || !emailValido(correo)) {
+        nuevosEstados.push(["ERROR_DATOS"]);
+        log(dni, "ERROR_DATOS", `Fila ${fila}`);
+        continue;
+      }
+
+      const clave = `${tipoArchivo(tipo)}_${dni}_${periodo}`;
+      const pdfs = index[clave];
+
+      if (!pdfs) {
+        nuevosEstados.push(["ERROR_DATOS"]);
+        log(dni, "PDF_NO_ENCONTRADO", clave);
+        continue;
+      }
+
+      if (pdfs.length > 1) {
+        nuevosEstados.push(["DUPLICADO"]);
+        log(dni, "DUPLICADO", clave);
+        continue;
+      }
+
+      try {
+        const mail = plantillaCorreo(tipo, nombre);
+        MailApp.sendEmail({
+          to: correo,
+          subject: mail.subject,
+          htmlBody: mail.body,
+          attachments: [pdfs[0].getBlob()]
+        });
+
+        cuotaDisponible--;
+        nuevosEstados.push(["ENVIADO"]);
+        log(dni, "ENVIADO", correo);
+
+      } catch (e) {
+        nuevosEstados.push(["ERROR_TEMP"]);
+        log(dni, "ERROR_ENVIO", e.message);
+      }
     }
 
-    // Si hay varios con el mismo doc, toma el primero (o podrías mejorar con más filtros)
-    const archivo = candidatos[0];
+    /* ===================== ESCRITURA MASIVA ===================== */
 
-    try {
-      const plantilla = obtenerPlantillaCorreo(tipoContrato, doc, nombre);
+    hoja.getRange(2, COL_ESTADO + 1, nuevosEstados.length, 1)
+         .setValues(nuevosEstados);
 
-      // Nombre del adjunto: conserva espacios en el nombre (como tu ejemplo)
-      const nombreAdjunto = `${(plantilla.subject.toLowerCase().startsWith("convenio") ? "Convenio" : "Contrato")} ${tipoContrato}_${doc}_${slugNombre(nombre)}.pdf`;
-      const pdfAdjunto = archivo.getBlob().setName(nombreAdjunto);
-
-      MailApp.sendEmail({
-        to: correo,
-        subject: plantilla.subject,
-        htmlBody: plantilla.htmlBody,
-        attachments: [pdfAdjunto]
-      });
-
-      hoja.getRange(i + 1, 5).setValue("ENVIADO");
-      Logger.log(`ENVIADO: ${correo} (fila ${i + 1})`);
-
-    } catch (error) {
-      hoja.getRange(i + 1, 5).setValue("ERROR");
-      Logger.log(`ERROR fila ${i + 1}: ${error && error.message ? error.message : error}`);
-    }
+  } finally {
+    lock.releaseLock();
   }
 }
-
