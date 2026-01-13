@@ -18,16 +18,16 @@ function envioMasivoContratos_v3_2() {
     /* ===================== CONFIG ===================== */
 
     const NOMBRE_HOJA = "Hoja 1";
-    const HOJA_LOG    = "LOG_ENVÍOS";
-    const FOLDER_ID   = "10ycIn7wyKTFBhPgYbj-VQvjIdwJ2yJ19";
+    const HOJA_LOG = "LOG_ENVÍOS";
+    const FOLDER_ID = "10ycIn7wyKTFBhPgYbj-VQvjIdwJ2yJ19";
 
     // Columnas (0-based)
-    const COL_DNI     = 0;
-    const COL_NOMBRE  = 1;
-    const COL_TIPO    = 2;
+    const COL_DNI = 0;
+    const COL_NOMBRE = 1;
+    const COL_TIPO = 2;
     const COL_PERIODO = 3;
-    const COL_CORREO  = 4;
-    const COL_ESTADO  = 5;
+    const COL_CORREO = 4;
+    const COL_ESTADO = 5;
 
     const hoja = SpreadsheetApp.getActive().getSheetByName(NOMBRE_HOJA);
     if (!hoja) throw new Error("No se encontró la hoja principal");
@@ -62,23 +62,62 @@ function envioMasivoContratos_v3_2() {
       return "contrato";
     };
 
-    const plantillaCorreo = (tipo, nombre) => {
-      tipo = tipo.toLowerCase();
-      if (tipo.includes("práct"))
-        return { subject: "Envío de Convenio de Prácticas", body:
-          `Estimado(a) <b>${nombre}</b>,<br><br>Adjuntamos su convenio firmado.<br><br>Saludos,<br><b>Talento Humano</b>` };
+    const plantillaCorreo = (tipoContrato, dni, nombre) => {
+      const tipo = tipoContrato.toLowerCase();
 
-      if (tipo === "adenda")
-        return { subject: "Envío de Adenda Contractual", body:
-          `Estimado(a) <b>${nombre}</b>,<br><br>Adjuntamos su adenda firmada.<br><br>Saludos,<br><b>Talento Humano</b>` };
+      if (tipo === "prácticas" || tipo === "practicas") {
+        return {
+          subject: `Convenio ${tipoContrato} - ${dni} - ${nombre}`,
+          body: `
+        Estimado(a) <b>${nombre}</b>,<br><br>
+        Cumplimos con enviar su convenio debidamente firmado por ambas partes.<br><br>
+        Saludos,<br><br>
+        <strong>Talento Humano</strong><br>
+        <strong>ASOCIACIÓN MUSEO DE ARTE DE LIMA</strong>
+      `
+        };
+      }
 
-      if (tipo === "laboral")
-        return { subject: "Envío de Contrato Laboral", body:
-          `Estimado(a) <b>${nombre}</b>,<br><br>Adjuntamos su contrato laboral firmado.<br><br>Saludos,<br><b>Talento Humano</b>` };
+      if (tipo === "laboral") {
+        return {
+          subject: `Contrato ${tipoContrato} - ${dni} - ${nombre}`,
+          body: `
+        Estimado(a) <b>${nombre}</b>,<br><br>
+        Cumplimos con enviar su contrato debidamente firmado por ambas partes.<br><br>
+        Saludos,<br><br>
+        <strong>Talento Humano</strong><br>
+        <strong>ASOCIACIÓN MUSEO DE ARTE DE LIMA</strong>
+      `
+        };
+      }
 
-      return { subject: "Envío de Contrato por Locación de Servicios", body:
-        `Estimado(a) <b>${nombre}</b>,<br><br>Adjuntamos su contrato firmado.<br><br>Saludos,<br><b>Talento Humano</b>` };
+      if (tipo === "adenda") {
+        return {
+          subject: `Adenda ${tipoContrato} - ${dni} - ${nombre}`,
+          body: `
+        Estimado(a) <b>${nombre}</b>,<br><br>
+        Cumplimos con enviar su adenda debidamente firmada por ambas partes.<br><br>
+        Saludos,<br><br>
+        <strong>Talento Humano</strong><br>
+        <strong>ASOCIACIÓN MUSEO DE ARTE DE LIMA</strong>
+      `
+        };
+      }
+
+      // Default: Locación (y cualquier otro valor)
+      return {
+        subject: `Contrato ${tipoContrato} - ${dni} - ${nombre}`,
+        body: `
+      Estimado(a) <b>${nombre}</b>,<br><br>
+      Cumplimos con enviar su contrato bajo la modalidad <b>Locación de Servicio</b>
+      debidamente firmado por ambas partes.<br><br>
+      Saludos,<br><br>
+      <strong>Talento Humano</strong><br>
+      <strong>ASOCIACIÓN MUSEO DE ARTE DE LIMA</strong>
+    `
+      };
     };
+
 
     const log = (dni, accion, detalle) => {
       logSheet.appendRow([new Date(), dni, accion, detalle]);
@@ -124,11 +163,11 @@ function envioMasivoContratos_v3_2() {
         continue;
       }
 
-      const dni     = normalizarDNI(datos[i][COL_DNI]);
-      const nombre  = limpiar(datos[i][COL_NOMBRE]);
-      const tipo    = limpiar(datos[i][COL_TIPO]);
+      const dni = normalizarDNI(datos[i][COL_DNI]);
+      const nombre = limpiar(datos[i][COL_NOMBRE]);
+      const tipo = limpiar(datos[i][COL_TIPO]);
       const periodo = validarPeriodo(limpiar(datos[i][COL_PERIODO]));
-      const correo  = limpiar(datos[i][COL_CORREO]);
+      const correo = limpiar(datos[i][COL_CORREO]);
 
       if (!dni || !nombre || !periodo || !tipoValido(tipo) || !emailValido(correo)) {
         nuevosEstados.push(["ERROR_DATOS"]);
@@ -152,7 +191,7 @@ function envioMasivoContratos_v3_2() {
       }
 
       try {
-        const mail = plantillaCorreo(tipo, nombre);
+        const mail = plantillaCorreo(tipo, dni, nombre);
         MailApp.sendEmail({
           to: correo,
           subject: mail.subject,
@@ -173,7 +212,7 @@ function envioMasivoContratos_v3_2() {
     /* ===================== ESCRITURA MASIVA ===================== */
 
     hoja.getRange(2, COL_ESTADO + 1, nuevosEstados.length, 1)
-         .setValues(nuevosEstados);
+      .setValues(nuevosEstados);
 
   } finally {
     lock.releaseLock();
