@@ -47,7 +47,8 @@ function envioMasivoContratos_v3_2() {
       return (s.length >= 8 && s.length <= 11) ? s : "";
     };
 
-    const validarPeriodo = p => /^\d{6}-\d{6}$/.test(p) ? p : "";
+    // ✅ PERIODO CON _
+    const validarPeriodo = p => /^\d{6}_\d{6}$/.test(p) ? p : "";
 
     const emailValido = e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
 
@@ -104,7 +105,7 @@ function envioMasivoContratos_v3_2() {
         };
       }
 
-      // Default: Locación (y cualquier otro valor)
+      // Default: Locación
       return {
         subject: `Contrato ${tipoContrato} - ${dni} - ${nombre}`,
         body: `
@@ -117,7 +118,6 @@ function envioMasivoContratos_v3_2() {
     `
       };
     };
-
 
     const log = (dni, accion, detalle) => {
       logSheet.appendRow([new Date(), dni, accion, detalle]);
@@ -133,7 +133,9 @@ function envioMasivoContratos_v3_2() {
     /* ===================== INDEXAR PDFs ===================== */
 
     const index = {};
-    const regexPDF = /^(Contrato|Convenio|Adenda)_(\d{8,11})_(\d{6}-\d{6})\.pdf$/i;
+
+    // ✅ NUEVO FORMATO PDF
+    const regexPDF = /^(Contrato Laboral|Contrato|Convenio|Adenda)_(\d{8,11})_([^_]+)_(\d{6})_(\d{6})\.pdf$/i;
 
     const files = DriveApp.getFolderById(FOLDER_ID).getFiles();
     while (files.hasNext()) {
@@ -141,7 +143,9 @@ function envioMasivoContratos_v3_2() {
       const m = f.getName().match(regexPDF);
       if (!m) continue;
 
-      const clave = `${m[1].toLowerCase()}_${m[2]}_${m[3]}`;
+      const periodoPDF = `${m[4]}_${m[5]}`;
+      const clave = `${m[1].toLowerCase()}_${m[2]}_${periodoPDF}`;
+
       index[clave] = index[clave] || [];
       index[clave].push(f);
     }
